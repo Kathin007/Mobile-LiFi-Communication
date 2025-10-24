@@ -1,0 +1,97 @@
+# solar_receiver_smooth_fixed.py
+import spidev, time
+from collections import deque
+
+spi = spidev.SpiDev()
+spi.open(0, 0)
+spi.max_speed_hz = 1350000
+
+def read_adc(ch):
+    r = spi.xfer2([1, (8 + ch) << 4, 0])
+    return ((r[1] & 3) << 8) + r[2]
+
+MORSE = {
+ '.-':'A','-...':'B','-.-.':'C','-..':'D','.':'E','..-.':'F',
+ '--.':'G','....':'H','..':'I','.---':'J','-.-':'K','.-..':'L',
+ '--':'M','-.':'N','---':'O','.--.':'P','--.-':'Q','.-.':'R',
+ '...':'S','-':'T','..-':'U','...-':'V','.--':'W','-..-':'X',
+ '-.--':'Y','--..':'Z','-----':'0','.----':'1','..---':'2',
+ '...--':'3','....-':'4','.....':'5','-....':'6','--...':'7',
+ '---..':'8','----.':'9'
+}
+
+CHANNEL = 0
+UNIT = 0.30       # seconds per dot (matches transmitter)
+CAL_SAMPLES = 100
+SMOOTH_N = 6
+HYST = 4
+
+def millis(): return time.time() * 1000.0
+def decode(seq): return MORSE.get(seq, '?')
+
+print("Calibrating ambient (keep laser OFF)...")
+vals = [read_adc(CHANNEL) for _ in range(CAL_SAMPLES)]
+ambient = sum(vals) / len(vals)
+THRESH = ambient + 8
+print(f"Ambient={ambient:.1f}, Threshold={THRESH:.1f}, smoothing={SMOOTH_N}, unit={UNIT}s\n")
+print("Listening (Ctrl+C to stop)\n")
+
+buff = deque(maxlen=SMOOTH_N)
+for _ in range(SMOOTH_N):
+    buff.append(read_adc(CHANNEL))
+
+light_on = False
+last_change = millis()
+current_symbol = ""
+decoded = ""
+last_state = False
+symbol_gap_timer = millis()
+
+try:
+    while True:
+         # read smoothed ADC
+        v = read_adc(CHANNEL)
+        buff.append(v)
+        avg = sum(buff) / len(buff)
+        state = avg > THRESH
+
+        now = millis()
+
+        # detect state changes
+        if state != last_state:
+            dur = now - last_change
+            last_change = now
+
+            if last_state:  # light was ON -> now OFF
+                units = dur / (UNIT * 1000.0)
+                if units < 1.5:
+                    current_symbol += '.'
+                    print('.', end='', flush=True)
+                else:
+                    current_symbol += '-'
+                    print('-', end='', flush=True)
+
+            else:  # light was OFF -> now ON
+                off_units = dur / (UNIT * 1000.0)
+                if 2 <= off_units < 5:   # letter gap
+                    if current_symbol:
+                            decoded += decode(current_symbol)
+                        current_symbol = ""
+                        print(' ', end='', flush=True)
+                elif off_units >= 5:      # word gap
+                    if current_symbol:
+                        decoded += decode(current_symbol)
+                        current_symbol = ""
+                    decoded += ' '
+                    print(' / ', end='', flush=True)
+
+        last_state = state
+        time.sleep(0.007)
+
+except KeyboardInterrupt:
+    if current_symbol:
+        decoded += decode(current_symbol)
+    print("\n\nDecoded message:\n", decoded)
+    spi.close()
+        
+SMOOTH_N = 6
