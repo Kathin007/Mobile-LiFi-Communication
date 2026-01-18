@@ -21,7 +21,7 @@ MODEL_PATH = "yolov8n.pt"
 
 # Import Logic
 from ultralytics import YOLO
-from mock_tello import MockTello 
+from mock_tello import MockTello
 
 class DroneDashboard(QMainWindow):
     def __init__(self):
